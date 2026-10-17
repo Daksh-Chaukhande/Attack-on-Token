@@ -1,0 +1,346 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  DONOR
+  VOLUNTEER
+  NGO
+  COMMUNITY_GROUP
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum OrganizationType {
+  RESTAURANT
+  BAKERY
+  SUPERMARKET
+  NGO_SHELTER
+  COMMUNITY_KITCHEN
+  FOOD_BANK
+  COMMUNITY_GROUP
+  OTHER
+}
+
+enum FoodCategory {
+  COOKED_MEALS
+  BAKERY
+  FRUITS
+  VEGETABLES
+  PACKAGED_FOOD
+  GROCERIES
+  DAIRY
+  OTHER
+}
+
+enum FoodType {
+  VEGETARIAN
+  VEGAN
+  NON_VEGETARIAN
+  EGGETARIAN
+}
+
+enum StorageRequirement {
+  AMBIENT
+  REFRIGERATED
+  FROZEN
+  HOT_HOLD
+}
+
+enum ListingStatus {
+  DRAFT
+  AVAILABLE
+  PARTIALLY_CLAIMED
+  FULLY_CLAIMED
+  EXPIRED
+  CANCELLED
+  COMPLETED
+  FLAGGED
+}
+
+enum ClaimStatus {
+  PENDING_PICKUP
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+enum VerificationMethod {
+  QR_SCAN
+  MANUAL_CODE
+  DONOR_CONFIRM
+}
+
+enum NotificationType {
+  CLAIM_CREATED
+  CLAIM_CANCELLED
+  PICKUP_REMINDER
+  PICKUP_VERIFIED
+  LISTING_EXPIRED
+  REPORT_UPDATE
+  SYSTEM
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+  ACTION_TAKEN
+}
+
+model User {
+  id            String        @id @default(uuid())
+  email         String        @unique
+  passwordHash  String
+  name          String
+  phone         String?
+  role          Role          @default(VOLUNTEER)
+  status        AccountStatus @default(ACTIVE)
+  avatarUrl     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  profile             UserProfile?
+  organizations       Organization[]        @relation("OrgOwner")
+  listings            FoodListing[]         @relation("DonorListings")
+  claims              Claim[]               @relation("UserClaims")
+  verifications       PickupVerification[]  @relation("Verifier")
+  notifications       Notification[]
+  reportsFiled        ListingReport[]       @relation("ReportedBy")
+  reportsResolved     ListingReport[]       @relation("ResolvedBy")
+  auditLogs           AuditLog[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+
+  @@index([role])
+  @@index([status])
+}
+
+model UserProfile {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio                  String?  @db.Text
+  address              String?
+  city                 String?
+  state                String?
+  postalCode           String?
+  latitude             Decimal? @db.Decimal(10, 7)
+  longitude            Decimal? @db.Decimal(10, 7)
+  preferredCategories  String?  @db.Text // JSON array of category names
+  notificationsEnabled Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model Organization {
+  id                 String           @id @default(uuid())
+  ownerId            String
+  owner              User             @relation("OrgOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  name               String
+  type               OrganizationType @default(OTHER)
+  registrationNumber String?
+  description        String?          @db.Text
+  address            String
+  city               String
+  phone              String
+  website            String?
+  verified           Boolean          @default(false)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  listings FoodListing[]
+  claims   Claim[]
+
+  @@index([ownerId])
+  @@index([type])
+}
+
+model FoodListing {
+  id                      String             @id @default(uuid())
+  donorId                 String
+  donor                   User               @relation("DonorListings", fields: [donorId], references: [id], onDelete: Cascade)
+  organizationId          String?
+  organization            Organization?      @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  title                   String
+  description             String             @db.Text
+  category                FoodCategory       @default(COOKED_MEALS)
+  foodType                FoodType           @default(VEGETARIAN)
+  totalQuantity           Decimal            @db.Decimal(10, 2)
+  reservedQuantity        Decimal            @default(0.00) @db.Decimal(10, 2)
+  remainingQuantity       Decimal            @db.Decimal(10, 2)
+  quantityUnit            String             // "kg", "portions", "boxes", "liters", "packets"
+  estimatedServings       Int                @default(1)
+  allergens               String?            @db.Text // JSON array: ["Nuts", "Gluten", "Dairy", "Soy", "None"]
+  storageRequirement      StorageRequirement @default(AMBIENT)
+  preparationDate         DateTime?
+  safeConsumptionDeadline DateTime?
+  pickupStartTime         DateTime
+  pickupEndTime           DateTime           // Expiration deadline
+  pickupAddress           String
+  latitude                Decimal?           @db.Decimal(10, 7)
+  longitude               Decimal?           @db.Decimal(10, 7)
+  specialInstructions     String?            @db.Text
+  contactPreference       String             @default("IN_APP")
+  status                  ListingStatus      @default(AVAILABLE)
+  imageUrl                String?            @db.VarChar(1000)
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+
+  images  FoodImage[]
+  claims  Claim[]
+  reports ListingReport[]
+
+  @@index([donorId])
+  @@index([status])
+  @@index([category])
+  @@index([foodType])
+  @@index([pickupEndTime])
+  @@index([createdAt])
+}
+
+model FoodImage {
+  id        String      @id @default(uuid())
+  listingId String
+  listing   FoodListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  url       String      @db.VarChar(1000)
+  caption   String?
+  isPrimary Boolean     @default(false)
+  createdAt DateTime    @default(now())
+
+  @@index([listingId])
+}
+
+model Claim {
+  id                 String      @id @default(uuid())
+  listingId          String
+  listing            FoodListing @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  claimantId         String
+  claimant           User        @relation("UserClaims", fields: [claimantId], references: [id], onDelete: Restrict)
+  organizationId     String?
+  organization       Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  quantity           Decimal     @db.Decimal(10, 2)
+  quantityUnit       String
+  status             ClaimStatus @default(PENDING_PICKUP)
+  verificationCode   String      @unique @db.VarChar(12) // 6-digit alphanumeric readable fallback
+  verificationToken  String      @unique @db.VarChar(64) // high-entropy opaque UUID/hash for QR
+  qrCodeDataUrl      String?     @db.LongText
+  notes              String?     @db.Text
+  claimedAt          DateTime    @default(now())
+  pickupDeadline     DateTime
+  collectedAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  pickupVerification PickupVerification?
+
+  @@index([listingId])
+  @@index([claimantId])
+  @@index([status])
+  @@index([verificationCode])
+  @@index([verificationToken])
+}
+
+model PickupVerification {
+  id                 String             @id @default(uuid())
+  claimId            String             @unique
+  claim              Claim              @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  verifiedById       String
+  verifiedBy         User               @relation("Verifier", fields: [verifiedById], references: [id], onDelete: Restrict)
+  verificationMethod VerificationMethod @default(QR_SCAN)
+  verifiedAt         DateTime           @default(now())
+  notes              String?
+
+  @@index([verifiedById])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String           @db.Text
+  type      NotificationType @default(SYSTEM)
+  isRead    Boolean          @default(false)
+  link      String?
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model ListingReport {
+  id           String       @id @default(uuid())
+  listingId    String
+  listing      FoodListing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  reporterId   String
+  reporter     User         @relation("ReportedBy", fields: [reporterId], references: [id], onDelete: Restrict)
+  reason       String
+  details      String       @db.Text
+  status       ReportStatus @default(PENDING)
+  adminNotes   String?      @db.Text
+  resolvedById String?
+  resolvedBy   User?        @relation("ResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedAt   DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([listingId])
+  @@index([reporterId])
+  @@index([status])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   String?  @db.Text // JSON metadata
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType])
+  @@index([createdAt])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
